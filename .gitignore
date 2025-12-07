@@ -1,3 +1,8 @@
 .ipynb_checkpoints/
 .DS_Store
 .idea/
+__pycache__/
+UNOSAT-Ground-Truths.zip
+ETCI-2021-Flood-Detection.zip
+pretrained_weights.tar.gz
+data/

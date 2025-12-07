@@ -10,14 +10,14 @@ import numpy as np
 import albumentations as A
 
 from torch.utils.data import DataLoader
-from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data.distributed import DistributedSampler
+# from torch.nn.parallel import DistributedDataParallel
+# from torch.utils.data.distributed import DistributedSampler
 import torch.multiprocessing as mp
 import segmentation_models_pytorch as smp
 import torch
 
 from etci_dataset import ETCIDataset
-from utils import sampler_utils
+# from utils import sampler_utils
 from utils import dataset_utils
 from utils import metric_utils
 from utils import worker_utils
@@ -44,6 +44,9 @@ logging.basicConfig(
 )
 
 
+# | vv_image_path             | vh_image_path             | flood_label_path                 | water_body_label_path                 | region   |
+# | ------------------------- | ------------------------- | -------------------------------- | ------------------------------------- | -------- |
+# | .../vv/RedRiver_...vv.png | .../vh/RedRiver_...vh.png | .../flood_label/RedRiver_....png | .../water_body_label/RedRiver_....png | RedRiver |
 def get_dataloader(rank, world_size):
     """Creates the data loaders."""
     # create dataframes
@@ -78,22 +81,22 @@ def get_dataloader(rank, world_size):
     train_dataset = ETCIDataset(train_df, split="train", transform=transform)
     validation_dataset = ETCIDataset(valid_df, split="validation", transform=None)
 
-    # create samplers
-    stratified_sampler = sampler_utils.BalanceClassSampler(
-        train_df["has_mask"].values.astype("int")
-    )
-    train_sampler = sampler_utils.DistributedSamplerWrapper(
-        stratified_sampler, rank=rank, num_replicas=world_size, shuffle=True
-    )
-    val_sampler = DistributedSampler(
-        validation_dataset, rank=rank, num_replicas=world_size, shuffle=False
-    )
+    # # create samplers
+    # stratified_sampler = sampler_utils.BalanceClassSampler(
+    #     train_df["has_mask"].values.astype("int")
+    # )
+    # train_sampler = sampler_utils.DistributedSamplerWrapper(
+    #     stratified_sampler, rank=rank, num_replicas=world_size, shuffle=True
+    # )
+    # val_sampler = DistributedSampler(
+    #     validation_dataset, rank=rank, num_replicas=world_size, shuffle=False
+    # )
 
     # create data loaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.local_batch_size,
-        sampler=train_sampler,
+        shuffle=True,
         pin_memory=True,
         num_workers=8,
         worker_init_fn=worker_utils.seed_worker,
@@ -101,11 +104,12 @@ def get_dataloader(rank, world_size):
     val_loader = DataLoader(
         validation_dataset,
         batch_size=config.local_batch_size,
-        sampler=val_sampler,
+        shuffle=False,
         pin_memory=True,
         num_workers=8,
     )
 
+    print("Data loaders created.")
     return train_loader, val_loader
 
 
@@ -122,7 +126,7 @@ def create_model(weight_path):
     return model
 
 
-def train(rank, num_epochs, world_size, pretrained_path, finetune_path):
+def train(rank, num_epochs, world_size, pretrained_path, finetuned_path, round):
     """Fine-tunes the segmentation model using distributed training."""
     # initialize the workers and fix the seeds
     worker_utils.init_process(rank, world_size)
@@ -132,7 +136,8 @@ def train(rank, num_epochs, world_size, pretrained_path, finetune_path):
     model = create_model(pretrained_path)
     torch.cuda.set_device(rank)
     model.cuda(rank)
-    model = DistributedDataParallel(model, device_ids=[rank])
+    # model = DistributedDataParallel(model, device_ids=[rank])
+    model = model.cuda()
 
     # configure optimizer and scheduler
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
@@ -140,14 +145,16 @@ def train(rank, num_epochs, world_size, pretrained_path, finetune_path):
 
     # define loss function and gradient scaler
     criterion_dice = smp.losses.DiceLoss(mode="multiclass")
-    scaler = torch.cuda.amp.GradScaler(enabled=True)
+    scaler = torch.cuda.amp.GradScaler("cuda", enabled=True)
 
     # get data loaders
     train_loader, val_loader = get_dataloader(rank, world_size)
 
     ## begin training ##
+    print("Starting training...")
     for epoch in range(num_epochs):
         losses = metric_utils.AvgMeter()
+
         if rank == 0:
             logging.info(
                 "Rank: {}/{} Epoch: [{}/{}]".format(
@@ -158,7 +165,7 @@ def train(rank, num_epochs, world_size, pretrained_path, finetune_path):
         # train set
         model.train()
         for batch in train_loader:
-            with torch.cuda.amp.autocast(enabled=True):
+            with torch.cuda.amp.autocast("cuda", enabled=True):
                 image = batch["image"].cuda(rank, non_blocking=True)
                 mask = batch["mask"].cuda(rank, non_blocking=True)
                 pred = model(image)
@@ -190,7 +197,7 @@ def train(rank, num_epochs, world_size, pretrained_path, finetune_path):
 
             with torch.no_grad():
                 for batch in val_loader:
-                    with torch.cuda.amp.autocast(enabled=True):
+                    with torch.cuda.amp.autocast("cuda", enabled=True):
                         image = batch["image"].cuda(rank, non_blocking=True)
                         mask = batch["mask"].cuda(rank, non_blocking=True)
                         pred = model(image)
@@ -204,7 +211,9 @@ def train(rank, num_epochs, world_size, pretrained_path, finetune_path):
                 logging.info(f"Epoch: {epoch + 1} Val Loss: {global_loss[0]:.3f}")
 
     if rank == 0:
-        torch.save(model.module.state_dict(), f"{finetune_path}_{rank}.pth")
+        torch.save(
+            model.state_dict(), f"{finetuned_path}_{rank}.pth"
+        )
 
 
 WORLD_SIZE = torch.cuda.device_count()
@@ -221,21 +230,30 @@ if __name__ == "__main__":
     )
     ap.add_argument(
         "-f",
-        "--finetune-path",
+        "--finetuned-path",
         type=str,
         help="paths to the weights to be serialized after fine-tuning (without .pth)",
         required=True,
     )
+    ap.add_argument("-r", "--round", type=int, default=0, help="round of pseudo-labeling")
     args = vars(ap.parse_args())
 
-    mp.spawn(
-        train,
-        args=(
-            args["epochs"],
-            WORLD_SIZE,
-            args["pretrained_path"],
-            args["finetune_path"],
-        ),
-        nprocs=WORLD_SIZE,
-        join=True,
-    )
+    # mp.spawn(
+    #     train,
+    #     args=(
+    #         args["epochs"],
+    #         WORLD_SIZE,
+    #         args["pretrained_path"],
+    #         args["finetune_path"],
+    #     ),
+    #     nprocs=WORLD_SIZE,
+    #     join=True,
+    # )
+
+    train(rank=0,
+          num_epochs=args["epochs"],
+          world_size=WORLD_SIZE,
+          pretrained_path=args["pretrained_path"],
+          finetuned_path=args["finetuned_path"],
+          round=args["round"])
+    

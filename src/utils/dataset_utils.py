@@ -76,7 +76,10 @@ def create_df(main_dir, split="train"):
         "region": region_names,
     }
 
-    return pd.DataFrame(paths)
+    print(f"Created {main_dir} dataframe with {len(paths['vv_image_path'])} entries.")
+    df = pd.DataFrame(paths)
+    print(df.head())
+    return df
 
 
 def filter_df(df):

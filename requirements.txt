@@ -6,3 +6,5 @@ ray
 torch
 torchvision
 ttach
+asf_search
+wget

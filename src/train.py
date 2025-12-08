@@ -1,5 +1,6 @@
 import argparse
 import os
+import pandas as pd
 import numpy as np
 import albumentations as A
 
@@ -18,6 +19,7 @@ from utils import worker_utils
 import config
 
 import warnings
+from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 
@@ -50,8 +52,10 @@ def get_dataloader(rank, world_size, round):
     if round > 0:
         # this path depends on where you have serialized the dataframe while
         # executing `notebook/Generate_Pseudo.ipynb`.
-        pseudo_df = "pseudo_df.csv"
-        train_df = train_df.append(pseudo_df)
+        print("Combining the training set with pseudo-labeled data...")
+        pseudo_df = pd.read_csv("pseudo_df.csv")
+        train_df = pd.concat([train_df, pseudo_df], ignore_index=True)
+        print("Combined dataframe has", len(train_df), "entries.")
 
     # determine if an image has mask or not
     flood_label_paths = train_df["flood_label_path"].values.tolist()
@@ -95,6 +99,8 @@ def get_dataloader(rank, world_size, round):
         shuffle=True,
         pin_memory=True,
         num_workers=8,
+        persistent_workers=True,
+        prefetch_factor=4,
         worker_init_fn=worker_utils.seed_worker,
     )
     val_loader = DataLoader(
@@ -103,6 +109,8 @@ def get_dataloader(rank, world_size, round):
         shuffle=False,
         pin_memory=True,
         num_workers=8,
+        persistent_workers=True,
+        prefetch_factor=4,
     )
 
     print("Data loaders created.")
@@ -149,7 +157,7 @@ def train(rank, model_class, num_epochs, world_size, round):
 
     # set up loss function and gradient scaler for mixed-precision
     criterion_dice = smp.losses.DiceLoss(mode="multiclass")
-    scaler = torch.cuda.amp.GradScaler("cuda", enabled=True)
+    scaler = torch.amp.GradScaler(enabled=True)
 
     # initialize data loaders
     train_loader, val_loader = get_dataloader(rank, world_size, round)
@@ -168,8 +176,8 @@ def train(rank, model_class, num_epochs, world_size, round):
 
         # train set
         model.train()
-        for batch in train_loader:
-            with torch.cuda.amp.autocast("cuda", enabled=True):
+        for batch in tqdm(train_loader, desc=f"Epoch [{epoch+1}/{num_epochs}] - Training"):
+            with torch.amp.autocast(device_type="cuda", enabled=True):
                 image = batch["image"].cuda(rank, non_blocking=True)
                 mask = batch["mask"].cuda(rank, non_blocking=True)
                 pred = model(image)
@@ -198,8 +206,8 @@ def train(rank, model_class, num_epochs, world_size, round):
             losses = metric_utils.AvgMeter()
 
             with torch.no_grad():
-                for batch in val_loader:
-                    with torch.cuda.amp.autocast("cuda", enabled=True):
+                for batch in tqdm(val_loader, desc=f"Epoch [{epoch+1}/{num_epochs}] - Validation"):
+                    with torch.amp.autocast(device_type="cuda", enabled=True):
                         image = batch["image"].cuda(rank, non_blocking=True)
                         mask = batch["mask"].cuda(rank, non_blocking=True)
                         pred = model(image)
@@ -213,11 +221,13 @@ def train(rank, model_class, num_epochs, world_size, round):
                 logging.info(f"Epoch: {epoch+1} Val Loss: {global_loss[0]:.3f}")
 
     # serialization of model weights
-    os.makedirs(f"model/round_{round}", exist_ok=True)
+    os.makedirs(f"src/model/round_{round}", exist_ok=True)
     if rank == 0:
         torch.save(
-            model.state_dict(), f"model/round_{round}/{model_class}_{config.backbone}_{rank}.pth"
+            model.state_dict(), f"src/model/round_{round}/{model_class}_{config.backbone}_{rank}.pth"
         )
+        print("Model weights saved.")
+    print("Training complete.")
 
 
 WORLD_SIZE = torch.cuda.device_count()

@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import torchvision
 import requests
 
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 from torch.utils.data import Dataset, DataLoader
 import torch
 import torch.nn as nn
@@ -112,7 +112,7 @@ def get_predictions_single(model_def, weight_path, test_loader, device):
     final_preds = []
 
     with torch.no_grad():
-        for batch in tqdm(test_loader):
+        for batch in tqdm(test_loader, desc=f"Predicting with {weight_path}", leave=True, dynamic_ncols=True):
             imgs = batch["image"].to(device)
             pred = model(imgs)
             final_preds.append(pred.detach().cpu().numpy())
@@ -143,6 +143,7 @@ def main(args):
     r = requests.get(url)
     with open("test_sentinel.csv", "wb") as f:
         f.write(r.content)
+    print("Downloaded test_sentinel.csv to", os.path.abspath("test_sentinel.csv"))
 
     test_file_sequence = (
         pd.read_csv("test_sentinel.csv", header=None)

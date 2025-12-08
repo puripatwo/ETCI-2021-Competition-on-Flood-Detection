@@ -7,7 +7,7 @@ import subprocess
 import numpy as np
 import pandas as pd
 import requests
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 import argparse
 
 import torch
@@ -123,7 +123,7 @@ def get_predictions_single(model_defs, weights, dir_path, test_loader, device,
     masks = []
 
     with torch.no_grad():
-        for batch in tqdm(test_loader):
+        for batch in tqdm(test_loader, desc="Generating pseudo-labels", leave=True, dynamic_ncols=True):
             image = batch["image"].to(device)
 
             preds = []
@@ -181,6 +181,7 @@ def main(args):
     r = requests.get(url)
     with open("test_sentinel.csv", "wb") as f:
         f.write(r.content)
+    print("Downloaded test_sentinel.csv to", os.path.abspath("test_sentinel.csv"))
 
     test_file_sequence = (
         pd.read_csv("test_sentinel.csv", header=None)
@@ -209,7 +210,7 @@ def main(args):
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=os.cpu_count(),
+        num_workers=8,
         pin_memory=True,
     )
 
@@ -232,7 +233,7 @@ def main(args):
         }
     )
 
-    print(pseudo_df.shape)
+    print("Generated pseudo-labels for", len(pseudo_df), "images.")
     pseudo_df.to_csv(args.pseudo_csv, index=False)
 
 

@@ -8,3 +8,4 @@ torchvision
 ttach
 asf_search
 wget
+matplotlib

@@ -8,7 +8,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import torchvision
 import requests
-import argparse
 
 from tqdm.notebook import tqdm
 from torch.utils.data import Dataset, DataLoader
@@ -16,6 +15,7 @@ import torch
 import torch.nn as nn
 import segmentation_models_pytorch as smp
 import ttach as tta
+import argparse
 
 warnings.filterwarnings("ignore")
 
@@ -38,6 +38,7 @@ def s1_to_rgb(vv_image, vh_image):
 def matplotlib_imshow(img):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.imshow(img.permute(1, 2, 0).numpy())
+    plt.show()
 
 
 # ---------- Dataset ----------
@@ -51,37 +52,56 @@ class ETCIDataset(Dataset):
         return self.dataset.shape[0]
 
     def __getitem__(self, index):
-        example = {}
-
         df_row = self.dataset.iloc[index]
+
         vv_image = cv2.imread(df_row["vv_image_path"], 0) / 255.0
         vh_image = cv2.imread(df_row["vh_image_path"], 0) / 255.0
 
         rgb_image = s1_to_rgb(vv_image, vh_image)
 
         if self.split == "test":
-            example["image"] = rgb_image.transpose((2, 0, 1)).astype("float32")
+            return {"image": rgb_image.transpose((2, 0, 1)).astype("float32")}
+
         else:
             flood_mask = cv2.imread(df_row["flood_label_path"], 0) / 255.0
-
             if self.transform:
                 augmented = self.transform(image=rgb_image, mask=flood_mask)
                 rgb_image = augmented["image"]
                 flood_mask = augmented["mask"]
+            return {
+                "image": rgb_image.transpose((2, 0, 1)).astype("float32"),
+                "mask": flood_mask.astype("int64"),
+            }
 
-            example["image"] = rgb_image.transpose((2, 0, 1)).astype("float32")
-            example["mask"] = flood_mask.astype("int64")
 
-        return example
+# ---------- Model Factory ----------
+def get_model_by_name(name: str):
+    name = name.lower()
+
+    if name == "unet_mobilenet_v2":
+        return smp.Unet(
+            encoder_name="mobilenet_v2",
+            encoder_weights=None,
+            in_channels=3,
+            classes=2,
+        )
+
+    if name in ("upp_mobilenet_v2", "unetplusplus_mobilenet_v2"):
+        return smp.UnetPlusPlus(
+            encoder_name="mobilenet_v2",
+            encoder_weights=None,
+            in_channels=3,
+            classes=2,
+        )
+
+    raise ValueError(f"Unknown model name: {name}")
 
 
 # ---------- Prediction Function ----------
 def get_predictions_single(model_def, weight_path, test_loader, device):
     model_def.load_state_dict(torch.load(weight_path))
     model = tta.SegmentationTTAWrapper(
-        model_def,
-        tta.aliases.d4_transform(),
-        merge_mode="mean"
+        model_def, tta.aliases.d4_transform(), merge_mode="mean"
     )
     model.to(device)
 
@@ -100,29 +120,25 @@ def get_predictions_single(model_def, weight_path, test_loader, device):
     return np.concatenate(final_preds, axis=0)
 
 
-# ---------- Model Making Function ----------
-def make_model(model_type: str):
-    """Map string name to actual SMP model."""
-    if model_type == "unet_mobilenet":
-        return smp.Unet(
-            encoder_name="mobilenet_v2", encoder_weights=None,
-            in_channels=3, classes=2
-        )
-    elif model_type == "unetplusplus_mobilenet":
-        return smp.UnetPlusPlus(
-            encoder_name="mobilenet_v2", encoder_weights=None,
-            in_channels=3, classes=2
-        )
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
-
-
 # ---------- Main ----------
 def main(args):
-    # Load test images
+    # Parse CLI lists
+    model_names = [m.strip() for m in args.model_defs.split(",")]
+    model_paths = [p.strip() for p in args.model_paths.split(",")]
+
+    assert len(model_names) == len(model_paths), \
+        "model-defs and model-paths must be the same length."
+
+    # Instantiate models
+    model_defs = [get_model_by_name(name) for name in model_names]
+
+    # Dataset root
     dset_root = "ETCI-2021-Flood-Detection/data/"
     test_dir = os.path.join(dset_root, "test_internal")
 
+    print("Number of test temporal-regions:", len(glob(test_dir + "/*/")))
+
+    # Load CSV list
     url = "https://git.io/JsRTE"
     r = requests.get(url)
     with open("test_sentinel.csv", "wb") as f:
@@ -143,75 +159,72 @@ def main(args):
     ]
 
     test_df = pd.DataFrame({"vv_image_path": all_test_vv, "vh_image_path": all_test_vh})
+    print(test_df.shape)
 
-    # DataLoader
-    batch_size = 96 * torch.cuda.device_count()
-    dataset = ETCIDataset(test_df, split="test", transform=None)
+    # Dataset + loader
+    test_dataset = ETCIDataset(test_df, split="test")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    batch_size = 96 * max(1, torch.cuda.device_count())
 
     test_loader = DataLoader(
-        dataset, batch_size=batch_size,
-        shuffle=False, num_workers=os.cpu_count(),
-        pin_memory=True
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=os.cpu_count(),
+        pin_memory=True,
     )
 
-    # Models
-    model_paths = args.model_paths
-    model_types = args.model_types
+    # Visual sample (optional)
+    images = next(iter(test_loader))["image"]
+    img_grid = torchvision.utils.make_grid(images[50:59], nrow=3)
+    matplotlib_imshow(img_grid)
 
-    if len(model_paths) != len(model_types):
-        raise ValueError("Number of --model-paths must match --model-types.")
-
-    print(f"Using {len(model_paths)} models:")
-    for m, p in zip(model_types, model_paths):
-        print(f" - {m} : {p}")
-
-    # Load and run models
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
+    # Run predictions
     all_preds = []
-
-    for mtype, path in zip(model_types, model_paths):
-        model = make_model(mtype)
-        preds = get_predictions_single(model, path, test_loader, device)
+    for model_def, path in zip(model_defs, model_paths):
+        preds = get_predictions_single(model_def, path, test_loader, device)
         all_preds.append(preds)
 
-    # Ensemble and save
+    # Ensemble
     all_preds = np.array(all_preds)
     all_preds = np.mean(all_preds, axis=0)
     class_preds = all_preds.argmax(axis=1).astype("uint8")
 
-    save_path = args.output
-    np.save(save_path, class_preds, fix_imports=True, allow_pickle=False)
+    # Save submission
+    np.save(args.submission_path, class_preds, fix_imports=True, allow_pickle=False)
+    subprocess.run(["zip", args.zip_name, args.submission_path])
 
-    subprocess.run(["zip", "submission.zip", save_path])
-    print(f"Saved submission.zip containing {save_path}")
+    print(f"Saved {args.zip_name}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ETCI Flood Prediction")
+    parser = argparse.ArgumentParser(description="ETCI Flood Segmentation Inference")
 
     parser.add_argument(
-        "--model-paths", nargs="+", type=str, required=False,
-        default=[
-            "src/model/round_0/unet_mobilenet_v2_0.pth",
-            "src/model/round_0/upp_mobilenet_v2_0.pth",
-        ],
-        help="List of .pth weight files"
+        "--model-defs",
+        type=str,
+        required=True,
+        help="Comma-separated model names (e.g., unet_mobilenet_v2,upp_mobilenet_v2)",
     )
-
     parser.add_argument(
-        "--model-types", nargs="+", type=str, required=False,
-        default=[
-            "unet_mobilenet",
-            "unetplusplus_mobilenet",
-        ],
-        help="List of model architectures matching model-paths"
+        "--model-paths",
+        type=str,
+        required=True,
+        help="Comma-separated model weight paths",
     )
-
     parser.add_argument(
-        "--output", type=str, default="submission.npy",
-        help="Numpy file to save predictions"
+        "--submission-path",
+        type=str,
+        default="submission.npy",
+        help="Output .npy file for predictions",
+    )
+    parser.add_argument(
+        "--zip-name",
+        type=str,
+        default="submission.zip",
+        help="Name of output zip archive",
     )
 
     args = parser.parse_args()
     main(args)
+    

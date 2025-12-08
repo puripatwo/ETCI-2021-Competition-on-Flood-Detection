@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import requests
 from tqdm.notebook import tqdm
+import argparse
 
 import torch
 import torch.nn as nn
@@ -48,12 +49,9 @@ class ETCIDataset(Dataset):
         example = {}
 
         df_row = self.dataset.iloc[index]
-
-        # load vv and vh images
         vv_image = cv2.imread(df_row['vv_image_path'], 0) / 255.0
         vh_image = cv2.imread(df_row['vh_image_path'], 0) / 255.0
 
-        # convert vv and vh images to rgb
         rgb_image = s1_to_rgb(vv_image, vh_image)
 
         if self.split == 'test':
@@ -73,6 +71,33 @@ class ETCIDataset(Dataset):
             example['mask'] = flood_mask.astype("int64")
 
         return example
+
+
+# ---------- Model Factory ----------
+def get_model_by_name(name):
+    """
+    Maps command-line model names to instantiated SMP models.
+    """
+    name = name.lower()
+
+    if name == "unet_mobilenet_v2":
+        return smp.Unet(
+            encoder_name="mobilenet_v2",
+            encoder_weights=None,
+            in_channels=3,
+            classes=2
+        )
+
+    elif name in ("unetplusplus_mobilenet_v2", "unetpp_mobilenet_v2", "upp_mobilenet_v2"):
+        return smp.UnetPlusPlus(
+            encoder_name="mobilenet_v2",
+            encoder_weights=None,
+            in_channels=3,
+            classes=2
+        )
+
+    else:
+        raise ValueError(f"Unknown model name: {name}")
 
 
 # ---------- Prediction Function ----------
@@ -133,7 +158,17 @@ def get_predictions_single(model_defs, weights, dir_path, test_loader, device,
 
 
 # ---------- Main ----------
-def main():
+def main(args):
+    # Parse CLI lists
+    model_names = [m.strip() for m in args.model_defs.split(",")]
+    model_paths = [p.strip() for p in args.model_paths.split(",")]
+
+    assert len(model_names) == len(model_paths), \
+        "model-defs and model-paths must have the same length."
+
+    # Build models from names
+    model_defs = [get_model_by_name(m) for m in model_names]
+
     # Dataset root
     dset_root = "ETCI-2021-Flood-Detection/data/"
     test_dir = os.path.join(dset_root, "test_internal")
@@ -148,7 +183,8 @@ def main():
         f.write(r.content)
 
     test_file_sequence = (
-        pd.read_csv("test_sentinel.csv", header=None).values.squeeze().tolist()
+        pd.read_csv("test_sentinel.csv", header=None)
+        .values.squeeze().tolist()
     )
 
     all_test_vv = [
@@ -163,11 +199,11 @@ def main():
     test_df = pd.DataFrame({"vv_image_path": all_test_vv, "vh_image_path": all_test_vh})
     print(test_df.shape)
 
-    # Dataset + Loader
+    # Load dataset
     test_dataset = ETCIDataset(test_df, split="test", transform=None)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    batch_size = 96 * torch.cuda.device_count()
+    batch_size = 96 * max(1, torch.cuda.device_count())
 
     test_loader = DataLoader(
         test_dataset,
@@ -177,32 +213,11 @@ def main():
         pin_memory=True,
     )
 
-    # Models
-    unet_mobilenet = smp.Unet(
-        encoder_name="mobilenet_v2",
-        encoder_weights=None,
-        in_channels=3,
-        classes=2
-    )
-
-    upp_mobilenet = smp.UnetPlusPlus(
-        encoder_name="mobilenet_v2",
-        encoder_weights=None,
-        in_channels=3,
-        classes=2
-    )
-
-    model_defs = [unet_mobilenet, upp_mobilenet]
-    model_paths = [
-        "src/model/round_0/unet_mobilenet_v2_0.pth",
-        "src/model/round_0/upp_mobilenet_v2_0.pth",
-    ]
-
     # Run predictions
     vv_s, vh_s, masks = get_predictions_single(
         model_defs=model_defs,
         weights=model_paths,
-        dir_path="pseudo_labels",
+        dir_path=args.pseudo_dir,
         test_loader=test_loader,
         device=device
     )
@@ -218,8 +233,39 @@ def main():
     )
 
     print(pseudo_df.shape)
-    pseudo_df.to_csv("pseudo_df.csv", index=False)
+    pseudo_df.to_csv(args.pseudo_csv, index=False)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--model-defs",
+        type=str,
+        required=True,
+        help="Comma-separated list of model names. Options: unet_mobilenet_v2, upp_mobilenet_v2"
+    )
+
+    parser.add_argument(
+        "--model-paths",
+        type=str,
+        required=True,
+        help="Comma-separated list of paths to model .pth files"
+    )
+
+    parser.add_argument(
+        "--pseudo-dir",
+        type=str,
+        default="pseudo_labels",
+        help="Directory to store generated pseudo labels"
+    )
+
+    parser.add_argument(
+        "--pseudo-csv",
+        type=str,
+        default="pseudo_df.csv",
+        help="Output CSV file name"
+    )
+
+    args = parser.parse_args()
+    main(args)

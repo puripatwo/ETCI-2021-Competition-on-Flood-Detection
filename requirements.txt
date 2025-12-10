@@ -12,5 +12,4 @@ matplotlib
 hyp3_sdk
 rasterio
 scikit-learn
-plot_utils
 seaborn

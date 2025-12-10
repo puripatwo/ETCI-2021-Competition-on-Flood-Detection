@@ -171,7 +171,7 @@ def main(args):
     model_defs = [get_model_by_name(m) for m in model_names]
 
     # Dataset root
-    dset_root = "final-ETCI-2021-Flood-Detection/data/"
+    dset_root = "final-UNOSAT-Dataset/data/"
     test_dir = os.path.join(dset_root, "test_internal")
 
     n_test_regions = len(glob(test_dir + "/*/"))

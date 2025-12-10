@@ -176,14 +176,20 @@ def save_confusion_matrix(y_true, y_pred, out_path):
     plt.close()
 
 
-def plot_loss_curve(train_losses, val_losses, out_path):
+def plot_loss_curve(train_losses, val_losses, val_epochs, out_path):
     plt.figure(figsize=(6,5))
-    plt.plot(train_losses, label="Train Loss")
+    
+    # X axis for training loss: 1..N
+    train_x = np.arange(1, len(train_losses) + 1)
+    plt.plot(train_x, train_losses, label="Train Loss")
+    
+    # X axis for val loss: explicit epoch numbers
     if val_losses:
-        plt.plot(val_losses, label="Validation Loss")
+        plt.plot(val_epochs, val_losses, "o-", label="Validation Loss")
+    
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.title("Training Loss Curve")
+    plt.title("Training & Validation Loss")
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_path)

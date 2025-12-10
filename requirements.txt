@@ -9,3 +9,5 @@ ttach
 asf_search
 wget
 matplotlib
+hyp3_sdk
+rasterio opencv-python

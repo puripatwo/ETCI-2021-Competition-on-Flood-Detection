@@ -37,7 +37,6 @@ def s1_to_rgb(vv_image, vh_image):
 
 
 # ---------- Dataset ----------
-### TODO ###
 class ETCIDataset(Dataset):
     def __init__(self, dataframe, split, transform=None):
         self.split = split
@@ -62,15 +61,15 @@ class ETCIDataset(Dataset):
             example['vh_image_path'] = df_row['vh_image_path']
 
         else:
-            flood_mask = cv2.imread(df_row['flood_label_path'], 0) / 255.0
+            mask = cv2.imread(df_row['label_path'], 0) / 255.0
 
             if self.transform:
-                augmented = self.transform(image=rgb_image, mask=flood_mask)
+                augmented = self.transform(image=rgb_image, mask=mask)
                 rgb_image = augmented['image']
-                flood_mask = augmented['mask']
+                mask = augmented['mask']
 
             example['image'] = rgb_image.transpose((2, 0, 1)).astype("float32")
-            example['mask'] = flood_mask.astype("int64")
+            example['mask'] = mask.astype("int64")
 
         return example
 
@@ -124,7 +123,6 @@ def get_predictions_single(model_defs, weights, dir_path, test_loader, device,
     vh_s = []
     masks = []
 
-    ### TODO ###
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Generating pseudo-labels", leave=True, dynamic_ncols=True):
             image = batch["image"].to(device)
@@ -135,7 +133,7 @@ def get_predictions_single(model_defs, weights, dir_path, test_loader, device,
                 preds.append(pred.detach().cpu().numpy())
 
             preds = np.array(preds)
-            preds = np.mean(preds, axis=0)
+            preds = np.mean(preds, axis=0) # (M, N, C, H, W) -> (N, C, H, W)
 
             filter_preds, _ = nn.Softmax(dim=1)(torch.tensor(preds)).max(1)
             filter_preds = filter_preds.numpy()
@@ -229,12 +227,11 @@ def main(args):
 
     assert len(vv_s) == len(vh_s) == len(masks)
 
-    ### TODO ###
     pseudo_df = pd.DataFrame(
         {
             "vv_image_path": vv_s,
             "vh_image_path": vh_s,
-            "flood_label_path": masks,
+            "label_path": masks,
         }
     )
 

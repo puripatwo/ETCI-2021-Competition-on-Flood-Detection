@@ -48,7 +48,6 @@ def matplotlib_imshow(img):
 
 
 # ---------- Dataset ----------
-### TODO ###
 class ETCIDataset(Dataset):
     def __init__(self, dataframe, split, transform=None):
         self.split = split
@@ -65,16 +64,16 @@ class ETCIDataset(Dataset):
         vh_image = cv2.imread(df_row["vh_image_path"], 0) / 255.0
 
         rgb_image = s1_to_rgb(vv_image, vh_image)
-        flood_mask = cv2.imread(df_row["flood_label_path"], 0) / 255.0
+        mask = cv2.imread(df_row["label_path"], 0) / 255.0
 
         if self.split == "train":
             if self.transform:
-                augmented = self.transform(image=rgb_image, mask=flood_mask)
+                augmented = self.transform(image=rgb_image, mask=mask)
                 rgb_image = augmented["image"]
-                flood_mask = augmented["mask"]
+                mask = augmented["mask"]
         return {
             "image": rgb_image.transpose((2, 0, 1)).astype("float32"),
-            "mask": flood_mask.astype("int64"),
+            "mask": mask.astype("int64"),
         }
 
 
@@ -125,7 +124,7 @@ def get_predictions_single(model_def, weight_path, test_loader, device):
             pred = model(imgs)
             preds_all.append(pred)
 
-    preds_all = torch.cat(preds_all, dim=0)
+    preds_all = torch.cat(preds_all, dim=0) # (N, 2, H, W)
     return preds_all
 
 
@@ -134,7 +133,7 @@ def evaluate_ensemble(preds, dataset, device, rank=0):
     preds: tensor of shape (N, 2, H, W)
     dataset: ETCIDataset(split='test')
     """
-    loader = DataLoader(dataset, batch_size=16, shuffle=False)
+    loader = DataLoader(dataset, batch_size=96, shuffle=False)
 
     iou_list, dice_list, prec_list, rec_list = [], [], [], []
     all_true, all_pred = [], []
@@ -152,6 +151,9 @@ def evaluate_ensemble(preds, dataset, device, rank=0):
             batch_preds = torch.argmax(batch_preds, dim=1) # (B, H, W)
 
             masks = batch["mask"].to(device)
+
+            batch_preds = batch_preds.long()
+            masks = masks.long()
 
             for p, t in zip(batch_preds, masks):
                 iou_list.append(metric_utils.iou_score(p, t).item())
@@ -175,7 +177,6 @@ def evaluate_ensemble(preds, dataset, device, rank=0):
     }
 
 
-### TODO ###
 def save_confusion_matrix(y_true, y_pred, out_path):
     """
     y_true, y_pred: flattened arrays of 0/1 pixels
@@ -183,8 +184,8 @@ def save_confusion_matrix(y_true, y_pred, out_path):
     cm = confusion_matrix(y_true, y_pred)
     plt.figure(figsize=(6,5))
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
-                xticklabels=["No Flood", "Flood"],
-                yticklabels=["No Flood", "Flood"])
+                xticklabels=["No Water", "Water"],
+                yticklabels=["No Water", "Water"])
     plt.title("Confusion Matrix")
     plt.xlabel("Predicted")
     plt.ylabel("True")
@@ -240,7 +241,7 @@ def main(args):
     test_dataset = ETCIDataset(test_df, split="test")
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    batch_size = 64 * max(1, torch.cuda.device_count())
+    batch_size = 96 * max(1, torch.cuda.device_count())
 
     test_loader = DataLoader(
         test_dataset,
@@ -272,7 +273,19 @@ def main(args):
 
     # print(f"Saved {args.zip_name}")
 
-    ensemble_logits = torch.mean(torch.stack(all_preds), dim=0)
+    # metrics_U = evaluate_ensemble(all_preds[0], test_dataset, device)
+    # print("ENSEMBLE METRICS:")
+    # for k, v in metrics_U.items():
+    #     if isinstance(v, float):
+    #         print(f"{k}: {v:.4f}")
+
+    # metrics_PP = evaluate_ensemble(all_preds[1], test_dataset, device)
+    # print("ENSEMBLE METRICS:")
+    # for k, v in metrics_PP.items():
+    #     if isinstance(v, float):
+    #         print(f"{k}: {v:.4f}")
+
+    ensemble_logits = torch.mean(torch.stack(all_preds), dim=0) # (2, N, 2, H, W)
     metrics = evaluate_ensemble(ensemble_logits, test_dataset, device)
 
     print("ENSEMBLE METRICS:")
@@ -280,10 +293,12 @@ def main(args):
         if isinstance(v, float):
             print(f"{k}: {v:.4f}")
 
+    out_dir = f"src/model/round_{args.round}"
+    os.makedirs(out_dir, exist_ok=True)
     save_confusion_matrix(
         metrics["true_pixels"],
         metrics["pred_pixels"],
-        f"src/model/round_{args.round}/ensemble_confusion_matrix.png"
+        f"{out_dir}/ensemble_confusion_matrix.png"
     )
 
 

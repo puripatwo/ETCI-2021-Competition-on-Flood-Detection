@@ -15,7 +15,6 @@ def s1_to_rgb(vv_image, vh_image):
     return rgb_image
 
 
-### TODO ###
 class ETCIDataset(Dataset):
     def __init__(self, dataframe, split, transform=None):
         self.split = split
@@ -36,16 +35,16 @@ class ETCIDataset(Dataset):
 
         # convert vv and vh images to rgb
         rgb_image = s1_to_rgb(vv_image, vh_image)
-        flood_mask = cv2.imread(df_row["flood_label_path"], 0) / 255.0
+        label_mask = cv2.imread(df_row["label_path"], 0) / 255.0
 
         if self.split == "train":
             # apply augmentations if specified
             if self.transform:
-                augmented = self.transform(image=rgb_image, mask=flood_mask)
+                augmented = self.transform(image=rgb_image, mask=label_mask)
                 rgb_image = augmented["image"]
-                flood_mask = augmented["mask"]
+                label_mask = augmented["mask"]
 
         example["image"] = rgb_image.transpose((2, 0, 1)).astype("float32")
-        example["mask"] = flood_mask.astype("int64")
+        example["mask"] = label_mask.astype("int64")
 
         return example

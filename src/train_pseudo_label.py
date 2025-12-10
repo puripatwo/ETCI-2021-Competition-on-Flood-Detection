@@ -68,9 +68,8 @@ def get_dataloader(rank, world_size):
     print("Combined dataframe has", len(train_df), "entries.")
 
     # determine if an image has mask or not
-    ### TODO ###
-    flood_label_paths = train_df["flood_label_path"].values.tolist()
-    train_has_masks = list(map(dataset_utils.has_mask, flood_label_paths))
+    label_paths = train_df["label_path"].values.tolist()
+    train_has_masks = list(map(dataset_utils.has_mask, label_paths))
     train_df["has_mask"] = train_has_masks
 
     # filter invalid images
@@ -166,7 +165,6 @@ def evaluate(model, data_loader, rank):
     }
 
 
-### TODO ###
 def save_confusion_matrix(y_true, y_pred, out_path):
     """
     y_true, y_pred: flattened arrays of 0/1 pixels
@@ -174,8 +172,8 @@ def save_confusion_matrix(y_true, y_pred, out_path):
     cm = confusion_matrix(y_true, y_pred)
     plt.figure(figsize=(6,5))
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
-                xticklabels=["No Flood", "Flood"],
-                yticklabels=["No Flood", "Flood"])
+                xticklabels=["No Water", "Water"],
+                yticklabels=["No Water", "Water"])
     plt.title("Confusion Matrix")
     plt.xlabel("Predicted")
     plt.ylabel("True")

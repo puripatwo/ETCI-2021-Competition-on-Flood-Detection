@@ -24,6 +24,7 @@ def get_filename(filepath):
     return os.path.split(filepath)[1]
 
 
+### TODO ###
 def create_df(main_dir, split="train"):
     vv_image_paths = sorted(glob(main_dir + "/**/vv/*.png", recursive=True))
     vv_image_names = [get_filename(pth) for pth in vv_image_paths]

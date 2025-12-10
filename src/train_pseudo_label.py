@@ -28,6 +28,11 @@ import config
 import warnings
 from tqdm import tqdm
 
+from sklearn.metrics import confusion_matrix
+from plot_utils import save_confusion_matrix, plot_loss_curve
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 warnings.filterwarnings("ignore")
 
 # fix all the seeds and disable non-deterministic CUDA backends for
@@ -63,6 +68,7 @@ def get_dataloader(rank, world_size):
     print("Combined dataframe has", len(train_df), "entries.")
 
     # determine if an image has mask or not
+    ### TODO ###
     flood_label_paths = train_df["flood_label_path"].values.tolist()
     train_has_masks = list(map(dataset_utils.has_mask, flood_label_paths))
     train_df["has_mask"] = train_has_masks
@@ -122,6 +128,76 @@ def get_dataloader(rank, world_size):
     return train_loader, val_loader
 
 
+def evaluate(model, data_loader, rank):
+    model.eval()
+
+    iou_list, dice_list, prec_list, rec_list = [], [], [], []
+    all_true = []
+    all_pred = []
+
+    with torch.no_grad():
+        for batch in tqdm(data_loader, desc="Evaluating"):
+            image = batch["image"].cuda(rank, non_blocking=True)
+            mask = batch["mask"].cuda(rank, non_blocking=True)
+
+            pred = model(image)
+            pred = torch.softmax(pred, dim=1)
+            pred = torch.argmax(pred, dim=1)  # (B, H, W)
+
+            for p, t in zip(pred, mask):
+                iou_list.append(metric_utils.iou_score(p, t).cpu().item())
+                dice_list.append(metric_utils.dice_score(p, t).cpu().item())
+                prec_list.append(metric_utils.precision(p, t).cpu().item())
+                rec_list.append(metric_utils.recall(p, t).cpu().item())
+
+                all_true.append(t.flatten().cpu().numpy())
+                all_pred.append(p.flatten().cpu().numpy())
+
+    all_true = np.concatenate(all_true)
+    all_pred = np.concatenate(all_pred)
+
+    return {
+        "iou": np.mean(iou_list),
+        "dice": np.mean(dice_list),
+        "precision": np.mean(prec_list),
+        "recall": np.mean(rec_list),
+        "true_pixels": all_true,
+        "pred_pixels": all_pred,
+    }
+
+
+### TODO ###
+def save_confusion_matrix(y_true, y_pred, out_path):
+    """
+    y_true, y_pred: flattened arrays of 0/1 pixels
+    """
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(6,5))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=["No Flood", "Flood"],
+                yticklabels=["No Flood", "Flood"])
+    plt.title("Confusion Matrix")
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+
+
+def plot_loss_curve(train_losses, val_losses, out_path):
+    plt.figure(figsize=(6,5))
+    plt.plot(train_losses, label="Train Loss")
+    if val_losses:
+        plt.plot(val_losses, label="Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training Loss Curve")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+
+
 def create_model(weight_path):
     """Initializes a segmentation model and loads the weights into it.
 
@@ -135,7 +211,7 @@ def create_model(weight_path):
     return model
 
 
-def train(rank, num_epochs, world_size, pretrained_path, finetuned_path, round):
+def train(rank, num_epochs, world_size, pretrained_path, round, eval=False):
     """Fine-tunes the segmentation model using distributed training."""
     # initialize the workers and fix the seeds
     worker_utils.init_process(rank, world_size)
@@ -161,6 +237,8 @@ def train(rank, num_epochs, world_size, pretrained_path, finetuned_path, round):
 
     ## begin training ##
     print("Starting training...")
+    train_losses = []
+    val_losses = []
     for epoch in range(num_epochs):
         losses = metric_utils.AvgMeter()
 
@@ -191,11 +269,12 @@ def train(rank, num_epochs, world_size, pretrained_path, finetuned_path, round):
         scheduler.step()
 
         loss = losses.avg
-        global_loss = metric_utils.global_meters_all_avg(rank, world_size, loss)
+        train_losses.append(loss)
+        # global_loss = metric_utils.global_meters_all_avg(rank, world_size, loss)
 
         if rank == 0:
             logging.info(f"Epoch: {epoch+1} learning rate: {scheduler.get_last_lr()}")
-            logging.info(f"Epoch: {epoch+1} Train Loss: {global_loss[0]:.3f}")
+            logging.info(f"Epoch: {epoch+1} Train Loss: {loss:.3f}")
 
         ## evaluation ##
         if epoch % 5 == 0:
@@ -215,18 +294,45 @@ def train(rank, num_epochs, world_size, pretrained_path, finetuned_path, round):
                         losses.update(loss.cpu().item(), image.size(0))
 
             loss = losses.avg
-            global_loss = metric_utils.global_meters_all_avg(rank, world_size, loss)
+            val_losses.append(loss)
+            # global_loss = metric_utils.global_meters_all_avg(rank, world_size, loss)
             if rank == 0:
-                logging.info(f"Epoch: {epoch + 1} Val Loss: {global_loss[0]:.3f}")
+                logging.info(f"Epoch: {epoch + 1} Val Loss: {loss:.3f}")
 
     # serialization of model weights
-    os.makedirs(f"src/model/round_{round}", exist_ok=True)
+    out_dir = f"src/model/round_{round}/finetuned_unet_mobilenet_v2"
+    os.makedirs(out_dir, exist_ok=True)
     if rank == 0:
         torch.save(
-            model.state_dict(), f"{finetuned_path}_{rank}.pth"
+            model.state_dict(), f"{out_dir}/saved_weights.pth"
         )
         print("Model weights saved.")
     print("Training complete.")
+
+    # plot loss curves
+    plot_loss_curve(train_losses, val_losses, f"{out_dir}/loss_curve.png")
+
+    if eval:
+        print("Starting evaluation...")
+        
+        # final evaluation on train and val sets
+        train_metrics = evaluate(model, train_loader, rank)
+        print("TRAIN METRICS:", train_metrics)
+
+        val_metrics = evaluate(model, val_loader, rank)
+        print("VAL METRICS:", val_metrics)
+
+        # plot confusion matrices
+        save_confusion_matrix(
+            train_metrics["true_pixels"],
+            train_metrics["pred_pixels"],
+            f"{out_dir}/train_confusion_matrix.png")
+
+        save_confusion_matrix(
+            val_metrics["true_pixels"],
+            val_metrics["pred_pixels"],
+            f"{out_dir}/val_confusion_matrix.png")
+        print("Evaluation complete.")
 
 
 WORLD_SIZE = torch.cuda.device_count()
@@ -241,14 +347,8 @@ if __name__ == "__main__":
         help="paths to the pretrained weights (with .pth)",
         required=True,
     )
-    ap.add_argument(
-        "-f",
-        "--finetuned-path",
-        type=str,
-        help="paths to the weights to be serialized after fine-tuning (without .pth)",
-        required=True,
-    )
     ap.add_argument("-r", "--round", type=int, default=0, help="round of pseudo-labeling")
+    ap.add_argument("--eval", action="store_true", help="Run evaluation instead of training")
     args = vars(ap.parse_args())
 
     # mp.spawn(
@@ -257,7 +357,6 @@ if __name__ == "__main__":
     #         args["epochs"],
     #         WORLD_SIZE,
     #         args["pretrained_path"],
-    #         args["finetune_path"],
     #     ),
     #     nprocs=WORLD_SIZE,
     #     join=True,
@@ -267,6 +366,6 @@ if __name__ == "__main__":
           num_epochs=args["epochs"],
           world_size=WORLD_SIZE,
           pretrained_path=args["pretrained_path"],
-          finetuned_path=args["finetuned_path"],
-          round=args["round"])
+          round=args["round"],
+          eval=args["eval"])
     

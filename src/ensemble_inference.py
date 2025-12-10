@@ -42,6 +42,7 @@ def matplotlib_imshow(img):
 
 
 # ---------- Dataset ----------
+### TODO ###
 class ETCIDataset(Dataset):
     def __init__(self, dataframe, split, transform=None):
         self.split = split
@@ -75,7 +76,10 @@ class ETCIDataset(Dataset):
 
 
 # ---------- Model Factory ----------
-def get_model_by_name(name: str):
+def get_model_by_name(name):
+    """
+    Maps command-line model names to instantiated SMP models.
+    """
     name = name.lower()
 
     if name == "unet_mobilenet_v2":
@@ -83,18 +87,19 @@ def get_model_by_name(name: str):
             encoder_name="mobilenet_v2",
             encoder_weights=None,
             in_channels=3,
-            classes=2,
+            classes=2
         )
 
-    if name in ("upp_mobilenet_v2", "unetplusplus_mobilenet_v2"):
+    elif name in ("unetplusplus_mobilenet_v2", "unetpp_mobilenet_v2", "upp_mobilenet_v2"):
         return smp.UnetPlusPlus(
             encoder_name="mobilenet_v2",
             encoder_weights=None,
             in_channels=3,
-            classes=2,
+            classes=2
         )
 
-    raise ValueError(f"Unknown model name: {name}")
+    else:
+        raise ValueError(f"Unknown model name: {name}")
 
 
 # ---------- Prediction Function ----------
@@ -133,12 +138,13 @@ def main(args):
     model_defs = [get_model_by_name(name) for name in model_names]
 
     # Dataset root
-    dset_root = "ETCI-2021-Flood-Detection/data/"
+    dset_root = "final-ETCI-2021-Flood-Detection/data/"
     test_dir = os.path.join(dset_root, "test_internal")
 
     print("Number of test temporal-regions:", len(glob(test_dir + "/*/")))
 
     # Load CSV list
+    ### TODO ###
     url = "https://git.io/JsRTE"
     r = requests.get(url)
     with open("test_sentinel.csv", "wb") as f:
@@ -164,6 +170,7 @@ def main(args):
 
     # Dataset + loader
     test_dataset = ETCIDataset(test_df, split="test")
+
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     batch_size = 96 * max(1, torch.cuda.device_count())
 
@@ -171,7 +178,7 @@ def main(args):
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=os.cpu_count(),
+        num_workers=8,
         pin_memory=True,
     )
 

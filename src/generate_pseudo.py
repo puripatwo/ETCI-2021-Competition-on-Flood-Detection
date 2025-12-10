@@ -36,6 +36,7 @@ def s1_to_rgb(vv_image, vh_image):
 
 
 # ---------- Dataset ----------
+### TODO ###
 class ETCIDataset(Dataset):
     def __init__(self, dataframe, split, transform=None):
         self.split = split
@@ -122,6 +123,7 @@ def get_predictions_single(model_defs, weights, dir_path, test_loader, device,
     vh_s = []
     masks = []
 
+    ### TODO ###
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Generating pseudo-labels", leave=True, dynamic_ncols=True):
             image = batch["image"].to(device)
@@ -170,13 +172,14 @@ def main(args):
     model_defs = [get_model_by_name(m) for m in model_names]
 
     # Dataset root
-    dset_root = "ETCI-2021-Flood-Detection/data/"
+    dset_root = "final-ETCI-2021-Flood-Detection/data/"
     test_dir = os.path.join(dset_root, "test_internal")
 
     n_test_regions = len(glob(test_dir + "/*/"))
     print("Number of test temporal-regions:", n_test_regions)
 
     # Load CSV list
+    ### TODO ###
     url = "https://git.io/JsRTE"
     r = requests.get(url)
     with open("test_sentinel.csv", "wb") as f:
@@ -202,7 +205,7 @@ def main(args):
 
     # Load dataset
     test_dataset = ETCIDataset(test_df, split="test", transform=None)
-
+    
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     batch_size = 96 * max(1, torch.cuda.device_count())
 
@@ -225,6 +228,7 @@ def main(args):
 
     assert len(vv_s) == len(vh_s) == len(masks)
 
+    ### TODO ###
     pseudo_df = pd.DataFrame(
         {
             "vv_image_path": vv_s,

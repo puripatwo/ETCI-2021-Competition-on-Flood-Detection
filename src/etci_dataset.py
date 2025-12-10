@@ -15,6 +15,7 @@ def s1_to_rgb(vv_image, vh_image):
     return rgb_image
 
 
+### TODO ###
 class ETCIDataset(Dataset):
     def __init__(self, dataframe, split, transform=None):
         self.split = split

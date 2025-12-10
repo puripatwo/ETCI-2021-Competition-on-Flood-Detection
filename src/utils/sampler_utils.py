@@ -12,6 +12,7 @@ from torch.utils.data.sampler import Sampler
 from catalyst.data.dataset.torch import DatasetFromSampler
 
 
+### TODO ###
 class BalanceClassSampler(Sampler):
     """Allows you to create stratified sample on unbalanced classes.
     Args:

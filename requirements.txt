@@ -11,3 +11,6 @@ wget
 matplotlib
 hyp3_sdk
 rasterio opencv-python
+scikit-learn
+plot_utils
+seaborn

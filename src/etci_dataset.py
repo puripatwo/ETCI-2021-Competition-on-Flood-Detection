@@ -36,21 +36,16 @@ class ETCIDataset(Dataset):
 
         # convert vv and vh images to rgb
         rgb_image = s1_to_rgb(vv_image, vh_image)
+        flood_mask = cv2.imread(df_row["flood_label_path"], 0) / 255.0
 
-        if self.split == "test":
-            # no flood mask should be available
-            example["image"] = rgb_image.transpose((2, 0, 1)).astype("float32")
-        else:
-            # load ground truth flood mask
-            flood_mask = cv2.imread(df_row["flood_label_path"], 0) / 255.0
-
+        if self.split == "train":
             # apply augmentations if specified
             if self.transform:
                 augmented = self.transform(image=rgb_image, mask=flood_mask)
                 rgb_image = augmented["image"]
                 flood_mask = augmented["mask"]
 
-            example["image"] = rgb_image.transpose((2, 0, 1)).astype("float32")
-            example["mask"] = flood_mask.astype("int64")
+        example["image"] = rgb_image.transpose((2, 0, 1)).astype("float32")
+        example["mask"] = flood_mask.astype("int64")
 
         return example

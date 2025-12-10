@@ -6,6 +6,8 @@ import cv2
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
 import torchvision
 import requests
 
@@ -16,6 +18,10 @@ import torch.nn as nn
 import segmentation_models_pytorch as smp
 import ttach as tta
 import argparse
+
+from utils import dataset_utils
+from utils import metric_utils
+import config
 
 warnings.filterwarnings("ignore")
 
@@ -59,20 +65,17 @@ class ETCIDataset(Dataset):
         vh_image = cv2.imread(df_row["vh_image_path"], 0) / 255.0
 
         rgb_image = s1_to_rgb(vv_image, vh_image)
+        flood_mask = cv2.imread(df_row["flood_label_path"], 0) / 255.0
 
-        if self.split == "test":
-            return {"image": rgb_image.transpose((2, 0, 1)).astype("float32")}
-
-        else:
-            flood_mask = cv2.imread(df_row["flood_label_path"], 0) / 255.0
+        if self.split == "train":
             if self.transform:
                 augmented = self.transform(image=rgb_image, mask=flood_mask)
                 rgb_image = augmented["image"]
                 flood_mask = augmented["mask"]
-            return {
-                "image": rgb_image.transpose((2, 0, 1)).astype("float32"),
-                "mask": flood_mask.astype("int64"),
-            }
+        return {
+            "image": rgb_image.transpose((2, 0, 1)).astype("float32"),
+            "mask": flood_mask.astype("int64"),
+        }
 
 
 # ---------- Model Factory ----------
@@ -104,7 +107,7 @@ def get_model_by_name(name):
 
 # ---------- Prediction Function ----------
 def get_predictions_single(model_def, weight_path, test_loader, device):
-    model_def.load_state_dict(torch.load(weight_path))
+    model_def.load_state_dict(torch.load(weight_path, map_location=device))
     model = tta.SegmentationTTAWrapper(
         model_def, tta.aliases.d4_transform(), merge_mode="mean"
     )
@@ -114,15 +117,80 @@ def get_predictions_single(model_def, weight_path, test_loader, device):
         model = nn.DataParallel(model)
 
     model.eval()
-    final_preds = []
+    preds_all = []
 
     with torch.no_grad():
-        for batch in tqdm(test_loader, desc=f"Predicting with {weight_path}", leave=True, dynamic_ncols=True):
+        for batch in tqdm(test_loader, desc=f"Predicting with {weight_path}"):
             imgs = batch["image"].to(device)
             pred = model(imgs)
-            final_preds.append(pred.detach().cpu().numpy())
+            preds_all.append(pred)
 
-    return np.concatenate(final_preds, axis=0)
+    preds_all = torch.cat(preds_all, dim=0)
+    return preds_all
+
+
+def evaluate_ensemble(preds, dataset, device, rank=0):
+    """
+    preds: tensor of shape (N, 2, H, W)
+    dataset: ETCIDataset(split='test')
+    """
+    loader = DataLoader(dataset, batch_size=16, shuffle=False)
+
+    iou_list, dice_list, prec_list, rec_list = [], [], [], []
+    all_true, all_pred = [], []
+
+    idx_start = 0
+    with torch.no_grad():
+        for batch in tqdm(loader, desc="Evaluating Ensemble"):
+            # slice ensemble output
+            B = batch["mask"].shape[0]
+            batch_preds = preds[idx_start:idx_start+B]
+            idx_start += B
+
+            # process predictions
+            batch_preds = torch.softmax(batch_preds, dim=1)
+            batch_preds = torch.argmax(batch_preds, dim=1) # (B, H, W)
+
+            masks = batch["mask"].to(device)
+
+            for p, t in zip(batch_preds, masks):
+                iou_list.append(metric_utils.iou_score(p, t).item())
+                dice_list.append(metric_utils.dice_score(p, t).item())
+                prec_list.append(metric_utils.precision(p, t).item())
+                rec_list.append(metric_utils.recall(p, t).item())
+
+                all_true.append(t.flatten().cpu().numpy())
+                all_pred.append(p.flatten().cpu().numpy())
+
+    all_true = np.concatenate(all_true)
+    all_pred = np.concatenate(all_pred)
+
+    return {
+        "iou": np.mean(iou_list),
+        "dice": np.mean(dice_list),
+        "precision": np.mean(prec_list),
+        "recall": np.mean(rec_list),
+        "true_pixels": all_true,
+        "pred_pixels": all_pred
+    }
+
+
+### TODO ###
+def save_confusion_matrix(y_true, y_pred, out_path):
+    """
+    y_true, y_pred: flattened arrays of 0/1 pixels
+    """
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(6,5))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=["No Flood", "Flood"],
+                yticklabels=["No Flood", "Flood"])
+    plt.title("Confusion Matrix")
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
 
 
 # ---------- Main ----------
@@ -144,35 +212,35 @@ def main(args):
     print("Number of test temporal-regions:", len(glob(test_dir + "/*/")))
 
     # Load CSV list
-    ### TODO ###
-    url = "https://git.io/JsRTE"
-    r = requests.get(url)
-    with open("test_sentinel.csv", "wb") as f:
-        f.write(r.content)
-    print("Downloaded test_sentinel.csv to", os.path.abspath("test_sentinel.csv"))
+    # url = "https://git.io/JsRTE"
+    # r = requests.get(url)
+    # with open("test_sentinel.csv", "wb") as f:
+    #     f.write(r.content)
+    # print("Downloaded test_sentinel.csv to", os.path.abspath("test_sentinel.csv"))
 
-    test_file_sequence = (
-        pd.read_csv("test_sentinel.csv", header=None)
-        .values.squeeze().tolist()
-    )
+    # test_file_sequence = (
+    #     pd.read_csv("test_sentinel.csv", header=None)
+    #     .values.squeeze().tolist()
+    # )
 
-    all_test_vv = [
-        os.path.join(test_dir, get_test_id(id), "tiles", "vv", make_im_name(id, "vv"))
-        for id in test_file_sequence
-    ]
-    all_test_vh = [
-        os.path.join(test_dir, get_test_id(id), "tiles", "vh", make_im_name(id, "vh"))
-        for id in test_file_sequence
-    ]
+    # all_test_vv = [
+    #     os.path.join(test_dir, get_test_id(id), "tiles", "vv", make_im_name(id, "vv"))
+    #     for id in test_file_sequence
+    # ]
+    # all_test_vh = [
+    #     os.path.join(test_dir, get_test_id(id), "tiles", "vh", make_im_name(id, "vh"))
+    #     for id in test_file_sequence
+    # ]
 
-    test_df = pd.DataFrame({"vv_image_path": all_test_vv, "vh_image_path": all_test_vh})
-    print(test_df.shape)
+    # test_df = pd.DataFrame({"vv_image_path": all_test_vv, "vh_image_path": all_test_vh})
+    # print(test_df.shape)
+    test_df = dataset_utils.create_df(config.test_dir)
 
     # Dataset + loader
     test_dataset = ETCIDataset(test_df, split="test")
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    batch_size = 96 * max(1, torch.cuda.device_count())
+    batch_size = 64 * max(1, torch.cuda.device_count())
 
     test_loader = DataLoader(
         test_dataset,
@@ -193,16 +261,30 @@ def main(args):
         preds = get_predictions_single(model_def, path, test_loader, device)
         all_preds.append(preds)
 
-    # Ensemble
-    all_preds = np.array(all_preds)
-    all_preds = np.mean(all_preds, axis=0)
-    class_preds = all_preds.argmax(axis=1).astype("uint8")
+    # # Ensemble
+    # all_preds = np.array(all_preds)
+    # all_preds = np.mean(all_preds, axis=0)
+    # class_preds = all_preds.argmax(axis=1).astype("uint8")
 
-    # Save submission
-    np.save(args.submission_path, class_preds, fix_imports=True, allow_pickle=False)
-    subprocess.run(["zip", args.zip_name, args.submission_path])
+    # # Save submission
+    # np.save(args.submission_path, class_preds, fix_imports=True, allow_pickle=False)
+    # subprocess.run(["zip", args.zip_name, args.submission_path])
 
-    print(f"Saved {args.zip_name}")
+    # print(f"Saved {args.zip_name}")
+
+    ensemble_logits = torch.mean(torch.stack(all_preds), dim=0)
+    metrics = evaluate_ensemble(ensemble_logits, test_dataset, device)
+
+    print("ENSEMBLE METRICS:")
+    for k, v in metrics.items():
+        if isinstance(v, float):
+            print(f"{k}: {v:.4f}")
+
+    save_confusion_matrix(
+        metrics["true_pixels"],
+        metrics["pred_pixels"],
+        f"src/model/round_{args.round}/ensemble_confusion_matrix.png"
+    )
 
 
 if __name__ == "__main__":
@@ -221,16 +303,10 @@ if __name__ == "__main__":
         help="Comma-separated model weight paths",
     )
     parser.add_argument(
-        "--submission-path",
-        type=str,
-        default="submission.npy",
-        help="Output .npy file for predictions",
-    )
-    parser.add_argument(
-        "--zip-name",
-        type=str,
-        default="submission.zip",
-        help="Name of output zip archive",
+        "--round",
+        type=int,
+        default=0,
+        help="round of pseudo-labeling"
     )
 
     args = parser.parse_args()

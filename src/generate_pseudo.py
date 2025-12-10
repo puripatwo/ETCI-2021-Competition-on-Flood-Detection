@@ -16,6 +16,7 @@ from torch.utils.data import Dataset, DataLoader
 
 import ttach as tta
 import segmentation_models_pytorch as smp
+from utils import dataset_utils
 
 warnings.filterwarnings("ignore")
 
@@ -179,33 +180,33 @@ def main(args):
     print("Number of test temporal-regions:", n_test_regions)
 
     # Load CSV list
-    ### TODO ###
-    url = "https://git.io/JsRTE"
-    r = requests.get(url)
-    with open("test_sentinel.csv", "wb") as f:
-        f.write(r.content)
-    print("Downloaded test_sentinel.csv to", os.path.abspath("test_sentinel.csv"))
+    # url = "https://git.io/JsRTE"
+    # r = requests.get(url)
+    # with open("test_sentinel.csv", "wb") as f:
+    #     f.write(r.content)
+    # print("Downloaded test_sentinel.csv to", os.path.abspath("test_sentinel.csv"))
 
-    test_file_sequence = (
-        pd.read_csv("test_sentinel.csv", header=None)
-        .values.squeeze().tolist()
-    )
+    # test_file_sequence = (
+    #     pd.read_csv("test_sentinel.csv", header=None)
+    #     .values.squeeze().tolist()
+    # )
 
-    all_test_vv = [
-        os.path.join(test_dir, get_test_id(id), "tiles", "vv", make_im_name(id, "vv"))
-        for id in test_file_sequence
-    ]
-    all_test_vh = [
-        os.path.join(test_dir, get_test_id(id), "tiles", "vh", make_im_name(id, "vh"))
-        for id in test_file_sequence
-    ]
+    # all_test_vv = [
+    #     os.path.join(test_dir, get_test_id(id), "tiles", "vv", make_im_name(id, "vv"))
+    #     for id in test_file_sequence
+    # ]
+    # all_test_vh = [
+    #     os.path.join(test_dir, get_test_id(id), "tiles", "vh", make_im_name(id, "vh"))
+    #     for id in test_file_sequence
+    # ]
 
-    test_df = pd.DataFrame({"vv_image_path": all_test_vv, "vh_image_path": all_test_vh})
-    print(test_df.shape)
+    # test_df = pd.DataFrame({"vv_image_path": all_test_vv, "vh_image_path": all_test_vh})
+    # print(test_df.shape)
+    test_df = dataset_utils.create_df(test_dir)
 
     # Load dataset
     test_dataset = ETCIDataset(test_df, split="test", transform=None)
-    
+
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     batch_size = 96 * max(1, torch.cuda.device_count())
 

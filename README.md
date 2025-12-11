@@ -8,7 +8,7 @@ This repository has been forked from [ETCI-2021-Competition-on-Flood-Detection](
 
 `git clone https://github.com/puripatwo/ETCI-2021-Competition-on-Flood-Detection.git`
 
-`pip install requirements.txt`
+`pip install -r requirements.txt`
 
 NOTE: You can use a Conda environment or a virtual environment here.
 

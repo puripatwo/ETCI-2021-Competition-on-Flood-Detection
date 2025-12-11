@@ -80,7 +80,7 @@ final-UNOSAT-Dataset/
     └── ...
 ```
 
-1. If you will be running the models in Google Colab, zip the file and upload it to Google Drive.
+6. If you will be running the models in Google Colab, zip the file and upload it to Google Drive.
 
 ## Model Pipeline
 

@@ -44,9 +44,6 @@ logging.basicConfig(
 )
 
 
-# | vv_image_path             | vh_image_path             | flood_label_path                 | water_body_label_path                 | region   |
-# | ------------------------- | ------------------------- | -------------------------------- | ------------------------------------- | -------- |
-# | .../vv/RedRiver_...vv.png | .../vh/RedRiver_...vh.png | .../flood_label/RedRiver_....png | .../water_body_label/RedRiver_....png | RedRiver |
 def get_dataloader(rank, world_size, round):
     """Creates the data loaders."""
     # create dataframes
@@ -207,7 +204,7 @@ def create_model(model_class, backbone):
         raise ValueError("model_class should be one of 'unet' or 'unetplusplus'")
     
     model = model_class(
-        encoder_name=backbone, encoder_weights="imagenet", in_channels=3, classes=2
+        encoder_name=backbone, encoder_weights=None, in_channels=3, classes=2
     )
     return model
 
@@ -233,7 +230,7 @@ def train(rank, model_class, num_epochs, world_size, round, eval=False):
         mode="multiclass",
         alpha=0.7,
         beta=0.3
-    ) + 0.5 * smp.losses.FocalLoss("binary")
+    )
     scaler = torch.amp.GradScaler(enabled=True)
 
     # initialize data loaders

@@ -9,7 +9,7 @@ test_dir = os.path.join(dataset_root, "test_internal")
 local_batch_size = 96
 
 # model related
-backbone = "mobilenet_v2"
+backbone = "mobilenet_v2" # default backbone
 
 # training related
 learning_rate = 1e-3

@@ -202,27 +202,27 @@ def plot_loss_curve(train_losses, val_losses, val_epochs, out_path):
     plt.close()
 
 
-def create_model(weight_path):
+def create_model(weight_path, backbone):
     """Initializes a segmentation model and loads the weights into it.
 
     Args:
         weight_path: Path to the pre-trained model weights.
     """
     model = smp.Unet(
-        encoder_name="mobilenet_v2", encoder_weights=None, in_channels=3, classes=2
+        encoder_name=backbone, encoder_weights=None, in_channels=3, classes=2
     )
     model.load_state_dict(torch.load(weight_path))
     return model
 
 
-def train(rank, num_epochs, world_size, pretrained_path, round, eval=False):
+def train(rank, num_epochs, world_size, pretrained_path, round, eval=False, backbone="mobilenet_v2"):
     """Fine-tunes the segmentation model using distributed training."""
     # initialize the workers and fix the seeds
     worker_utils.init_process(rank, world_size)
     torch.manual_seed(0)
 
     # model loading and off-loading to the current device
-    model = create_model(pretrained_path)
+    model = create_model(pretrained_path, backbone)
     torch.cuda.set_device(rank)
     model.cuda(rank)
     # model = DistributedDataParallel(model, device_ids=[rank])
@@ -237,7 +237,7 @@ def train(rank, num_epochs, world_size, pretrained_path, round, eval=False):
         mode="multiclass",
         alpha=0.7,
         beta=0.3
-    ) + 0.5 * smp.losses.FocalLoss("binary")
+    )
     scaler = torch.amp.GradScaler(enabled=True)
 
     # get data loaders
@@ -308,7 +308,7 @@ def train(rank, num_epochs, world_size, pretrained_path, round, eval=False):
                 logging.info(f"Epoch: {epoch + 1} Val Loss: {loss:.3f}")
 
     # serialization of model weights
-    out_dir = f"src/model/round_{round}/finetuned_unet_mobilenet_v2"
+    out_dir = f"src/model/round_{round}/finetuned_unet_{backbone}"
     os.makedirs(out_dir, exist_ok=True)
     if rank == 0:
         torch.save(
@@ -357,6 +357,13 @@ if __name__ == "__main__":
     )
     ap.add_argument("-r", "--round", type=int, default=0, help="round of pseudo-labeling")
     ap.add_argument("--eval", action="store_true", help="Run evaluation instead of training")
+    ap.add_argument(
+        "-b",
+        "--backbone",
+        type=str,
+        default="mobilenet_v2",
+        help="backbone model for UNet (default: mobilenet_v2)",
+    )
     args = vars(ap.parse_args())
 
     # mp.spawn(
@@ -375,5 +382,5 @@ if __name__ == "__main__":
           world_size=WORLD_SIZE,
           pretrained_path=args["pretrained_path"],
           round=args["round"],
-          eval=args["eval"])
+          eval=args["eval"],)
     

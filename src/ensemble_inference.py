@@ -78,23 +78,23 @@ class ETCIDataset(Dataset):
 
 
 # ---------- Model Factory ----------
-def get_model_by_name(name):
+def get_model_by_name(name, backbone):
     """
     Maps command-line model names to instantiated SMP models.
     """
     name = name.lower()
 
-    if name == "unet_mobilenet_v2":
+    if name == "unet":
         return smp.Unet(
-            encoder_name="mobilenet_v2",
+            encoder_name=backbone,
             encoder_weights=None,
             in_channels=3,
             classes=2
         )
 
-    elif name in ("unetplusplus_mobilenet_v2", "unetpp_mobilenet_v2", "upp_mobilenet_v2"):
+    elif name in ("unetplusplus", "unetpp", "upp"):
         return smp.UnetPlusPlus(
-            encoder_name="mobilenet_v2",
+            encoder_name=backbone,
             encoder_weights=None,
             in_channels=3,
             classes=2
@@ -195,7 +195,7 @@ def save_confusion_matrix(y_true, y_pred, out_path):
 
 
 # ---------- Main ----------
-def main(args):
+def main(args, backbone):
     # Parse CLI lists
     model_names = [m.strip() for m in args.model_defs.split(",")]
     model_paths = [p.strip() for p in args.model_paths.split(",")]
@@ -204,7 +204,7 @@ def main(args):
         "model-defs and model-paths must be the same length."
 
     # Instantiate models
-    model_defs = [get_model_by_name(name) for name in model_names]
+    model_defs = [get_model_by_name(name, backbone) for name in model_names]
 
     # Dataset root
     dset_root = "final-UNOSAT-Dataset/data/"
@@ -309,13 +309,20 @@ if __name__ == "__main__":
         "--model-defs",
         type=str,
         required=True,
-        help="Comma-separated model names (e.g., unet_mobilenet_v2,upp_mobilenet_v2)",
+        help="Comma-separated model names (e.g., unet, upp)",
     )
     parser.add_argument(
         "--model-paths",
         type=str,
         required=True,
         help="Comma-separated model weight paths",
+    )
+    parser.add_argument(
+        "-b",
+        "--backbone",
+        type=str,
+        default="mobilenet_v2",
+        help="backbone model for UNet (default: mobilenet_v2)",
     )
     parser.add_argument(
         "--round",

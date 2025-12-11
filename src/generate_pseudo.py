@@ -75,23 +75,23 @@ class ETCIDataset(Dataset):
 
 
 # ---------- Model Factory ----------
-def get_model_by_name(name):
+def get_model_by_name(name, backbone):
     """
     Maps command-line model names to instantiated SMP models.
     """
     name = name.lower()
 
-    if name == "unet_mobilenet_v2":
+    if name == "unet":
         return smp.Unet(
-            encoder_name="mobilenet_v2",
+            encoder_name=backbone,
             encoder_weights=None,
             in_channels=3,
             classes=2
         )
 
-    elif name in ("unetplusplus_mobilenet_v2", "unetpp_mobilenet_v2", "upp_mobilenet_v2"):
+    elif name in ("unetplusplus", "unetpp", "upp"):
         return smp.UnetPlusPlus(
-            encoder_name="mobilenet_v2",
+            encoder_name=backbone,
             encoder_weights=None,
             in_channels=3,
             classes=2
@@ -168,7 +168,7 @@ def main(args):
         "model-defs and model-paths must have the same length."
 
     # Build models from names
-    model_defs = [get_model_by_name(m) for m in model_names]
+    model_defs = [get_model_by_name(m, args.backbone) for m in model_names]
 
     # Dataset root
     dset_root = "final-UNOSAT-Dataset/data/"
@@ -246,7 +246,7 @@ if __name__ == "__main__":
         "--model-defs",
         type=str,
         required=True,
-        help="Comma-separated list of model names. Options: unet_mobilenet_v2, upp_mobilenet_v2"
+        help="Comma-separated list of model names. Options: unet, upp"
     )
 
     parser.add_argument(
@@ -254,6 +254,14 @@ if __name__ == "__main__":
         type=str,
         required=True,
         help="Comma-separated list of paths to model .pth files"
+    )
+
+    parser.add_argument(
+        "-b",
+        "--backbone",
+        type=str,
+        default="mobilenet_v2",
+        help="backbone model for UNet (default: mobilenet_v2)",
     )
 
     parser.add_argument(

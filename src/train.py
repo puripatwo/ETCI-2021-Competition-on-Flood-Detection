@@ -209,14 +209,14 @@ def create_model(model_class, backbone):
     return model
 
 
-def train(rank, model_class, num_epochs, world_size, round, eval=False):
+def train(rank, model_class, num_epochs, world_size, round, eval=False, backbone="mobilenet_v2"):
     """Trains the segmentation model using distributed training."""
     # initialize the workers and fix the seeds
     worker_utils.init_process(rank, world_size)
     torch.manual_seed(0)
 
     # model loading and off-loading to the current device
-    model = create_model(model_class, config.backbone)
+    model = create_model(model_class, backbone)
     torch.cuda.set_device(rank)
     model.cuda(rank)
     # model = DistributedDataParallel(model, device_ids=[rank])
@@ -300,7 +300,7 @@ def train(rank, model_class, num_epochs, world_size, round, eval=False):
                 logging.info(f"Epoch: {epoch+1} Val Loss: {loss:.3f}")
 
     # serialization of model weights
-    out_dir = f"src/model/round_{round}/{model_class}_{config.backbone}"
+    out_dir = f"src/model/round_{round}/{model_class}_{backbone}"
     os.makedirs(out_dir, exist_ok=True)
     if rank == 0:
         torch.save(
@@ -343,6 +343,7 @@ if __name__ == "__main__":
     ap.add_argument("-e", "--epochs", type=int, default=15, help="number of epochs")
     ap.add_argument("-r", "--round", type=int, default=0, help="round of pseudo-labeling")
     ap.add_argument("--eval", action="store_true", help="Run evaluation instead of training")
+    ap.add_argument("-b", "--backbone", type=str, default="mobilenet_v2", help="backbone model for UNet (default: mobilenet_v2)")
     args = vars(ap.parse_args())
 
     # mp.spawn(train, args=(config.num_epochs, WORLD_SIZE), nprocs=WORLD_SIZE, join=True)
@@ -352,5 +353,6 @@ if __name__ == "__main__":
           num_epochs=args["epochs"],
           world_size=WORLD_SIZE,
           round=args["round"],
-          eval=args["eval"])
+          eval=args["eval"],
+          backbone=args["backbone"])
     

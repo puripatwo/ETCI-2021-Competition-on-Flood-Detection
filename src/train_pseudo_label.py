@@ -233,7 +233,11 @@ def train(rank, num_epochs, world_size, pretrained_path, round, eval=False):
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
 
     # define loss function and gradient scaler
-    criterion_dice = smp.losses.DiceLoss(mode="multiclass")
+    criterion = smp.losses.TverskyLoss(
+        mode="multiclass",
+        alpha=0.7,
+        beta=0.3
+    ) + 0.5 * smp.losses.FocalLoss("binary")
     scaler = torch.amp.GradScaler(enabled=True)
 
     # get data loaders
@@ -261,7 +265,7 @@ def train(rank, num_epochs, world_size, pretrained_path, round, eval=False):
                 mask = batch["mask"].cuda(rank, non_blocking=True)
                 pred = model(image)
 
-                loss = criterion_dice(pred, mask)
+                loss = criterion(pred, mask)
                 losses.update(loss.cpu().item(), image.size(0))
 
             # update the model
@@ -294,7 +298,7 @@ def train(rank, num_epochs, world_size, pretrained_path, round, eval=False):
                         mask = batch["mask"].cuda(rank, non_blocking=True)
                         pred = model(image)
 
-                        loss = criterion_dice(pred, mask)
+                        loss = criterion(pred, mask)
                         losses.update(loss.cpu().item(), image.size(0))
 
             loss = losses.avg

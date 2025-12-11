@@ -176,20 +176,14 @@ def save_confusion_matrix(y_true, y_pred, out_path):
     plt.close()
 
 
-def plot_loss_curve(train_losses, val_losses, val_epochs, out_path):
+def plot_loss_curve(train_losses, val_losses, out_path):
     plt.figure(figsize=(6,5))
-    
-    # X axis for training loss: 1..N
-    train_x = np.arange(1, len(train_losses) + 1)
-    plt.plot(train_x, train_losses, label="Train Loss")
-    
-    # X axis for val loss: explicit epoch numbers
+    plt.plot(train_losses, label="Train Loss")
     if val_losses:
-        plt.plot(val_epochs, val_losses, "o-", label="Validation Loss")
-    
+        plt.plot(val_losses, label="Validation Loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
-    plt.title("Training & Validation Loss")
+    plt.title("Training Loss Curve")
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_path)
@@ -213,7 +207,7 @@ def create_model(model_class, backbone):
         raise ValueError("model_class should be one of 'unet' or 'unetplusplus'")
     
     model = model_class(
-        encoder_name=backbone, encoder_weights=None, in_channels=3, classes=2
+        encoder_name=backbone, encoder_weights="imagenet", in_channels=3, classes=2
     )
     return model
 
@@ -235,7 +229,11 @@ def train(rank, model_class, num_epochs, world_size, round, eval=False):
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
 
     # set up loss function and gradient scaler for mixed-precision
-    criterion_dice = smp.losses.DiceLoss(mode="multiclass")
+    criterion = smp.losses.TverskyLoss(
+        mode="multiclass",
+        alpha=0.7,
+        beta=0.3
+    ) + 0.5 * smp.losses.FocalLoss("binary")
     scaler = torch.amp.GradScaler(enabled=True)
 
     # initialize data loaders
@@ -263,7 +261,7 @@ def train(rank, model_class, num_epochs, world_size, round, eval=False):
                 mask = batch["mask"].cuda(rank, non_blocking=True)
                 pred = model(image)
 
-                loss = criterion_dice(pred, mask)
+                loss = criterion(pred, mask)
                 losses.update(loss.cpu().item(), image.size(0))
 
             # update the model
@@ -294,7 +292,7 @@ def train(rank, model_class, num_epochs, world_size, round, eval=False):
                         mask = batch["mask"].cuda(rank, non_blocking=True)
                         pred = model(image)
 
-                        loss = criterion_dice(pred, mask)
+                        loss = criterion(pred, mask)
                         losses.update(loss.cpu().item(), image.size(0))
 
             loss = losses.avg
